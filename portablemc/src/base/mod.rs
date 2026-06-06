@@ -11,7 +11,7 @@ use std::fs::{self, File};
 use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, thread};
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 
 use indexmap::IndexSet;
 
@@ -816,8 +816,28 @@ impl Installer {
                     let mut archive = ZipArchive::new(src_reader)
                         .map_err(|e| Error::new_zip_file(e, src_file))?;
                     
+                    // First pass: collect the native file names in this archive so we can
+                    // reconcile LWJGL2-style 32/64-bit twins (e.g. liblwjgl.so + liblwjgl64.so).
+                    // On a 64-bit host the base name must carry the 64-bit build, otherwise
+                    // legacy LWJGL2 loads the 32-bit one and dies with "wrong ELF class:
+                    // ELFCLASS32". Modern LWJGL3 natives jars don't use the '64' suffix, so this
+                    // never triggers for them.
+                    let host_64 = os_bits() == Some("64");
+                    let mut native_names = std::collections::HashSet::<String>::new();
+                    if host_64 {
+                        for i in 0..archive.len() {
+                            let file = archive.by_index(i).unwrap();
+                            let Some(p) = file.enclosed_name() else { continue };
+                            let Some(e) = p.extension() else { continue };
+                            if !matches!(e.as_encoded_bytes(), b"so" | b"dll" | b"dylib") { continue }
+                            if let Some(n) = p.file_name().and_then(|n| n.to_str()) {
+                                native_names.insert(n.to_string());
+                            }
+                        }
+                    }
+
                     for i in 0..archive.len() {
-                        
+
                         let mut file = archive.by_index(i).unwrap();
                         let Some(file_path) = file.enclosed_name() else {
                             continue;
@@ -832,16 +852,39 @@ impl Installer {
 
                         // Unwrapping because file should have a name if it has extension.
                         let file_name = file_path.file_name().unwrap();
-                        let dst_file = bin_dir.join(file_name);
 
-                        let mut dst_writer = File::create(&dst_file)
-                            .map_err(|e| Error::new_io_file(e, &dst_file))?;
+                        // Compute the target name(s). On a 64-bit host, an entry named
+                        // "<stem>64.<ext>" is also written under the base name "<stem>.<ext>",
+                        // and a plain "<stem>.<ext>" that has a "<stem>64.<ext>" twin is skipped
+                        // (the 64-bit twin owns the base name).
+                        let mut targets: Vec<OsString> = Vec::with_capacity(2);
+                        match (host_64, file_name.to_str(), file_ext.to_str()) {
+                            (true, Some(name), Some(ext)) => {
+                                if let Some(stem) = name.strip_suffix(&format!("64.{ext}")) {
+                                    targets.push(file_name.to_os_string());
+                                    targets.push(OsString::from(format!("{stem}.{ext}")));
+                                } else {
+                                    let base_stem = name.strip_suffix(&format!(".{ext}")).unwrap_or(name);
+                                    if native_names.contains(&format!("{base_stem}64.{ext}")) {
+                                        continue;  // 32-bit twin: skip, the 64-bit one owns base.
+                                    }
+                                    targets.push(file_name.to_os_string());
+                                }
+                            }
+                            _ => targets.push(file_name.to_os_string()),
+                        }
 
-                        io::copy(&mut file, &mut dst_writer)
-                            .map_err(|e| Error::new_io(e, format!("extract: {}, from: {}, to: {}", 
+                        // Read the entry once, then write it to each resolved target.
+                        let mut buf = Vec::new();
+                        io::copy(&mut file, &mut buf)
+                            .map_err(|e| Error::new_io(e, format!("extract: {}, from: {}",
                                 file.name(),
-                                src_file.display(),
-                                dst_file.display())))?;
+                                src_file.display())))?;
+                        for target in &targets {
+                            let dst_file = bin_dir.join(target);
+                            fs::write(&dst_file, &buf)
+                                .map_err(|e| Error::new_io_file(e, &dst_file))?;
+                        }
 
                     }
 
