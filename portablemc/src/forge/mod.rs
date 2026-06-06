@@ -1085,8 +1085,11 @@ fn try_install(
             data.insert("SIDE".to_string(), InstallDataTypedEntry::Literal(side.as_str().to_string()));
             data.insert("MINECRAFT_JAR".to_string(), InstallDataTypedEntry::File(game_client_file));
             data.insert("MINECRAFT_VERSION".to_string(), InstallDataTypedEntry::Literal(config.game_version.to_string()));
-            // Currently no support for ROOT because it's apparently used only for server...
-            // data.insert("ROOT".to_string(), InstallDataTypedEntry::File(mojang.standard().));
+            // ROOT = the Minecraft main directory (parent of libraries/). Older installers only
+            // used it server-side, but newer NeoForge installers (>= 1.21.10 / 26.x) reference it
+            // in a client processor too, so omitting it fails the variable substitution.
+            data.insert("ROOT".to_string(), InstallDataTypedEntry::File(
+                libraries_dir.parent().unwrap_or(libraries_dir.as_path()).to_path_buf()));
             data.insert("INSTALLER".to_string(), InstallDataTypedEntry::File(installer_file.to_path_buf()));
             data.insert("LIBRARY_DIR".to_string(), InstallDataTypedEntry::File(libraries_dir.to_path_buf()));
 
