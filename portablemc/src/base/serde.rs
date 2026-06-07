@@ -389,8 +389,16 @@ impl<'de> serde::Deserialize<'de> for DateTimeChill {
                     }
                     Err(e) if e.kind() == ParseErrorKind::Invalid => {
                         if let Some(index) = v.rfind(&['+', '-']) {
+                            let tail = &v[index..];
                             // This order avoids overflows.
-                            if v.len() - index == 5 && v[v.len() - 4..].is_ascii() {
+                            if tail.len() == 5 && tail.is_ascii() && tail.as_bytes()[2] == b':' {
+                                // Single-digit-hour offset like "+0:00" — the Forge 1.21.11
+                                // installer writes this malformed TZ. Pad to "+00:00".
+                                err = e;
+                                buf = v.to_string();
+                                buf.insert(index + 1, '0');
+                            } else if v.len() - index == 5 && v[v.len() - 4..].is_ascii() {
+                                // Offset without a colon like "+0800" -> "+08:00".
                                 err = e;
                                 buf = v.to_string();
                                 buf.insert(v.len() - 2, ':');
