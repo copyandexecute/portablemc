@@ -596,25 +596,34 @@ impl Repo {
                 }
             };
 
-        // To search the maximum version...
-        let mut max_loader = [0; 4];
-        let mut max_version = None;
-        for version in self.iter() {
-            // Filter versions that starts with the right prefix...
-            let Some(loader) = version.name().strip_prefix(&prefix) else { continue };
-            // Ignore unstable versions when not requested!
-            if stable && !version.is_stable() { continue }
-            // Parse the loader version as 4-digit versions, because Forge used to have 
-            // such long versions, ignoring versions that could not be parsed.
-            let Some(loader) = parse_generic_version::<4, 1>(loader, true) else { continue };
-            // Then compare to find the maximum version...
-            if loader > max_loader {
-                max_loader = loader;
-                max_version = Some(version);
+        // First pass honors `stable`. If that requested stable but found nothing, a second pass
+        // drops the filter: NeoForge ships only beta loaders for in-between MC patches
+        // (e.g. 1.21.7, 1.21.9, 26.1 base, 26.1.1) — promoting just select patches (1.21.8,
+        // 1.21.10, 26.1.2) to stable — so a stable-only search would fail to install them.
+        for require_stable in [stable, false] {
+            // To search the maximum version...
+            let mut max_loader = [0; 4];
+            let mut max_version = None;
+            for version in self.iter() {
+                // Filter versions that starts with the right prefix...
+                let Some(loader) = version.name().strip_prefix(&prefix) else { continue };
+                // Ignore unstable versions when not requested!
+                if require_stable && !version.is_stable() { continue }
+                // Parse the loader version as 4-digit versions, because Forge used to have
+                // such long versions, ignoring versions that could not be parsed.
+                let Some(loader) = parse_generic_version::<4, 1>(loader, true) else { continue };
+                // Then compare to find the maximum version...
+                if loader > max_loader {
+                    max_loader = loader;
+                    max_version = Some(version);
+                }
+            }
+            if max_version.is_some() {
+                return max_version;
             }
         }
 
-        max_version
+        None
 
     }
 
